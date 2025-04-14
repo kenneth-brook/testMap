@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Mapbox + NWS Layers (Working Toggles)</title>
+  <link href="https://api.mapbox.com/mapbox-gl-js/v3.0.1/mapbox-gl.css" rel="stylesheet"/>
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; }
+    #map { width: 100%; height: 100vh; }
+    .controls {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: rgba(255,255,255,0.95);
+      padding: 10px;
+      border-radius: 8px;
+      font-family: sans-serif;
+      z-index: 10;
+    }
+    .controls label {
+      display: block;
+      font-size: 14px;
+      margin-bottom: 6px;
+    }
+  </style>
+</head>
+<body>
+<div id="map"></div>
+<div class="controls">
+  <label><input type="checkbox" class="toggle" data-layer="nws-alerts-layer" checked /> NWS Alerts</label>
+  <label><input type="checkbox" class="toggle" data-layer="nws-radar-layer" checked /> Radar</label>
+  <label><input type="checkbox" class="toggle" data-layer="nws-satellite-layer" checked /> Satellite</label>
+  <label><input type="checkbox" class="toggle" data-layer="red-flag-layer" checked /> Red Flag Warnings</label>
+  <label><input type="checkbox" class="toggle" data-layer="spc-outlook-layer" checked /> SPC Outlook</label>
+  <label><input type="checkbox" class="toggle" data-layer="flood-gauges-layer" checked /> Flood Gauges</label>
+</div>
+
+<script src="https://api.mapbox.com/mapbox-gl-js/v3.0.1/mapbox-gl.js"></script>
+<script>
+  mapboxgl.accessToken = "pk.eyJ1Ijoid29tYmF0MTk3MiIsImEiOiJjbDdycmxjNXIwaTJ1M3BudXB2ZTZoZm1tIn0.v-NAvl8Ba0yPtAtxOt9iTg";
+
+  const map = new mapboxgl.Map({
+    container: "map",
+    style: "mapbox://styles/mapbox/streets-v12",
+    center: [-95, 39],
+    zoom: 4,
+  });
+
+  const toggles = {};
+
+  // Global toggle function (binds before or after layers load)
+  function bindToggles() {
+    document.querySelectorAll(".toggle").forEach(input => {
+      const layerId = input.dataset.layer;
+      toggles[layerId] = input.checked;
+
+      input.addEventListener("change", () => {
+        const state = input.checked ? "visible" : "none";
+        if (map.getLayer(layerId)) {
+          map.setLayoutProperty(layerId, "visibility", state);
+        }
+      });
+    });
+  }
+
+  function applyToggleStates() {
+    Object.entries(toggles).forEach(([layerId, checked]) => {
+      if (map.getLayer(layerId)) {
+        map.setLayoutProperty(layerId, "visibility", checked ? "visible" : "none");
+      }
+    });
+  }
+
+  map.on("load", async () => {
+    bindToggles();
+
+    // Radar
+    map.addSource("nws-radar", {
+      type: "raster",
+      tiles: [
+        "https://opengeo.ncep.noaa.gov/geoserver/conus/conus_bref_qcd/wms?" +
+        "service=WMS&version=1.1.1&request=GetMap&layers=conus_bref_qcd&styles=" +
+        "&format=image/png&transparent=true&srs=EPSG:3857&bbox={bbox-epsg-3857}&width=512&height=512"
+      ],
+      tileSize: 512
+    });
+    map.addLayer({
+      id: "nws-radar-layer",
+      type: "raster",
+      source: "nws-radar",
+      layout: { visibility: "visible" },
+      paint: {
+        "raster-opacity": 0.6,
+        "raster-resampling": "linear"
+      }
+    });
+
+    // Satellite
+    map.addSource("nws-satellite", {
+      type: "raster",
+      tiles: [
+        "https://opengeo.ncep.noaa.gov/geoserver/sat/sat_ir/wms?" +
+        "service=WMS&version=1.1.1&request=GetMap&layers=sat_ir&styles=" +
+        "&format=image/png&transparent=true&srs=EPSG:3857&bbox={bbox-epsg-3857}&width=512&height=512"
+      ],
+      tileSize: 512
+    });
+    map.addLayer({
+      id: "nws-satellite-layer",
+      type: "raster",
+      source: "nws-satellite",
+      layout: { visibility: "visible" },
+      paint: {
+        "raster-opacity": 0.5
+      }
+    });
+
+    // NWS Alerts
+    const alertRes = await fetch("https://api.weather.gov/alerts/active");
+    const alertData = await alertRes.json();
+    map.addSource("nws-alerts", { type: "geojson", data: alertData });
+    map.addLayer({
+      id: "nws-alerts-layer",
+      type: "fill",
+      source: "nws-alerts",
+      layout: { visibility: "visible" },
+      paint: {
+        "fill-color": "rgba(255,0,0,0.4)",
+        "fill-outline-color": "#aa0000"
+      },
+      filter: ["!=", ["get", "event"], "Red Flag Warning"]
+    });
+
+    // Red Flag Warnings (filtered)
+    map.addLayer({
+      id: "red-flag-layer",
+      type: "fill",
+      source: "nws-alerts",
+      layout: { visibility: "visible" },
+      paint: {
+        "fill-color": "rgba(255,165,0,0.4)",
+        "fill-outline-color": "#ffa500"
+      },
+      filter: ["==", ["get", "event"], "Red Flag Warning"]
+    });
+
+    // SPC Convective Outlook
+    const spcRes = await fetch("https://www.spc.noaa.gov/products/outlook/day1otlk_cat.lyr.geojson");
+    const spcData = await spcRes.json();
+    map.addSource("spc-outlook", { type: "geojson", data: spcData });
+    map.addLayer({
+      id: "spc-outlook-layer",
+      type: "fill",
+      source: "spc-outlook",
+      layout: { visibility: "visible" },
+      paint: {
+        "fill-color": "rgba(255,255,0,0.3)",
+        "fill-outline-color": "#cccc00"
+      }
+    });
+
+    // Flood Gauges
+    const gaugeRes = await fetch("https://waterservices.usgs.gov/nwis/iv/?format=json&parameterCd=00065&stateCd=ga&siteType=ST&siteStatus=active");
+    const gaugeJson = await gaugeRes.json();
+    const sites = gaugeJson.value.timeSeries.map(site => ({
+      type: "Feature",
+      geometry: {
+        type: "Point",
+        coordinates: [
+          parseFloat(site.sourceInfo.geoLocation.geogLocation.longitude),
+          parseFloat(site.sourceInfo.geoLocation.geogLocation.latitude)
+        ]
+      },
+      properties: {
+        name: site.sourceInfo.siteName,
+        value: site.values[0].value[0]?.value
+      }
+    }));
+
+    map.addSource("flood-gauges", {
+      type: "geojson",
+      data: {
+        type: "FeatureCollection",
+        features: sites
+      }
+    });
+    map.addLayer({
+      id: "flood-gauges-layer",
+      type: "circle",
+      source: "flood-gauges",
+      layout: { visibility: "visible" },
+      paint: {
+        "circle-radius": 5,
+        "circle-color": "#0000ff",
+        "circle-opacity": 0.7
+      }
+    });
+
+    // Re-apply toggle visibility states after layers load
+    applyToggleStates();
+  });
+</script>
+</body>
+</html>
